@@ -1,0 +1,91 @@
+{
+  "manifest_version": 3,
+  "name": "Instant Bookmark",
+  "version": "0.0.1",
+  "description": "Save hovered links (or the current tab) into your chosen bookmark folders via 10 keyboard shortcuts.",
+  "permissions": [
+    "bookmarks",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Instant Bookmark",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "contentScript.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "commands": {
+    "save_to_folder_1": {
+      "suggested_key": {
+        "default": "Alt+1",
+        "mac": "Alt+1"
+      },
+      "description": "Save hovered link/current tab to folder #1"
+    },
+    "save_to_folder_2": {
+      "suggested_key": {
+        "default": "Alt+2",
+        "mac": "Alt+2"
+      },
+      "description": "Save hovered link/current tab to folder #2"
+    },
+    "save_to_folder_3": {
+      "suggested_key": {
+        "default": "Alt+3",
+        "mac": "Alt+3"
+      },
+      "description": "Save hovered link/current tab to folder #3"
+    },
+    "save_to_folder_4": {
+      "suggested_key": {
+        "default": "Alt+4",
+        "mac": "Alt+4"
+      },
+      "description": "Save hovered link/current tab to folder #4"
+    },
+    "save_to_folder_5": {
+      "description": "Save hovered link/current tab to folder #5"
+    },
+    "save_to_folder_6": {
+      "description": "Save hovered link/current tab to folder #6"
+    },
+    "save_to_folder_7": {
+      "description": "Save hovered link/current tab to folder #7"
+    },
+    "save_to_folder_8": {
+      "description": "Save hovered link/current tab to folder #8"
+    },
+    "save_to_folder_9": {
+      "description": "Save hovered link/current tab to folder #9"
+    },
+    "save_to_folder_10": {
+      "description": "Save hovered link/current tab to folder #10"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16" height="16" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Instant Bookmark">
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="#0b0c0f"/>
+  <path d="M44 30.5H84C88.1421 30.5 91.5 33.8579 91.5 38V102.5L64 88.5L36.5 102.5V38C36.5 33.8579 39.8579 30.5 44 30.5Z" stroke="#f4f5f7" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M74 48L63 66H79L54 98" stroke="#f4f5f7" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
