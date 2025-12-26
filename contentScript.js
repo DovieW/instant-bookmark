@@ -1,5 +1,9 @@
 let lastGoodHover = null;
 
+let lastSentUrl = null;
+let lastSentAt = 0;
+const HOVER_SEND_MIN_INTERVAL_MS = 200;
+
 function isProbablyUsefulUrl(url, rawHref) {
   if (!url || typeof url !== "string") return false;
 
@@ -55,7 +59,31 @@ function getLiveHoveredAnchor() {
 
 function onPointerMove() {
   const live = getLiveHoveredAnchor();
-  if (live) lastGoodHover = live;
+  if (live) {
+    lastGoodHover = live;
+
+    // Push updates to the service worker so it can use hovered links even when
+    // on-demand frame messaging is unreliable (e.g. Gmail iframes).
+    const now = Date.now();
+    const shouldSend =
+      live.url &&
+      (live.url !== lastSentUrl || now - lastSentAt >= HOVER_SEND_MIN_INTERVAL_MS);
+
+    if (shouldSend) {
+      lastSentUrl = live.url;
+      lastSentAt = now;
+      try {
+        chrome.runtime.sendMessage({
+          type: "instant-bookmark:hoverUpdate",
+          url: live.url,
+          title: live.title,
+          ts: live.ts,
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }
 }
 
 window.addEventListener("pointermove", onPointerMove, { capture: true, passive: true });
@@ -73,7 +101,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return;
     }
 
-    // If nothing is currently hovered, treat as a tab-save.
-    sendResponse(null);
+    // Important: do NOT respond with `null`.
+    // In iframe-heavy apps (like Gmail), *multiple* content scripts receive this message.
+    // If the top frame responds quickly with null, it prevents the iframe (where the actual
+    // hovered link lives) from responding with the real URL.
+    //
+    // So we only respond when we have a usable URL (live or a very recent last-good hover).
+    if (lastGoodHover && Date.now() - lastGoodHover.ts < 2500) {
+      sendResponse({ url: lastGoodHover.url, title: lastGoodHover.title });
+      return;
+    }
+
+    // No response => background will treat this as "no hovered link" and fall back to tab URL.
+    return;
   }
 });

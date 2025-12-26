@@ -1,6 +1,29 @@
 const STORAGE_KEY = "instantBookmark.folderPaths.v1";
 const CLOSE_TAB_KEY = "instantBookmark.closeTabAfterSave.v1";
 
+// Tracks the most recently hovered link reported by any frame in a tab.
+// Key: tabId, Value: { url, title, ts }
+const lastHoveredByTab = new Map();
+
+const HOVER_FRESH_MS = 2500;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function showSaveFeedback({ tabId, message }) {
+  // Badge feedback: requires no extra permissions.
+  // (The message is currently unused for the badge, but kept for future flexibility.)
+  try {
+    await chrome.action.setBadgeBackgroundColor({ color: "#2e7d32" });
+    await chrome.action.setBadgeText({ text: "✓" });
+    await sleep(1200);
+    await chrome.action.setBadgeText({ text: "" });
+  } catch {
+    // Some Chromium variants or policies may restrict action APIs.
+  }
+}
+
 /**
  * Load the 10 user-defined folder paths.
  * Returns an array of length 10 with strings (possibly empty).
@@ -135,6 +158,20 @@ async function getHoveredLinkFromTab(tabId) {
   }
 }
 
+function getRecentHoveredLinkFromCache(tabId) {
+  const v = lastHoveredByTab.get(tabId);
+  if (!v || typeof v !== "object") return null;
+  if (!v.url || typeof v.url !== "string") return null;
+  const ts = Number(v.ts);
+  if (!Number.isFinite(ts)) return null;
+  if (Date.now() - ts > HOVER_FRESH_MS) return null;
+
+  return {
+    url: v.url,
+    title: typeof v.title === "string" && v.title.trim() ? v.title.trim() : v.url,
+  };
+}
+
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs?.[0] ?? null;
@@ -154,7 +191,9 @@ async function saveToSlot(slotIndex) {
   const folderId = await resolveFolderIdFromPath(parseFolderPath(pathToUse));
   if (!folderId) return;
 
-  const hovered = await getHoveredLinkFromTab(tab.id);
+  // Prefer hover cache first (works across iframes, e.g. Gmail).
+  // Fall back to asking the tab directly.
+  const hovered = getRecentHoveredLinkFromCache(tab.id) ?? (await getHoveredLinkFromTab(tab.id));
 
   const usedHoveredLink = Boolean(hovered?.url);
   const url = usedHoveredLink ? hovered.url : tab.url;
@@ -167,6 +206,12 @@ async function saveToSlot(slotIndex) {
     title,
     url,
   });
+
+  const targetLabel = usedHoveredLink ? "Link" : "Tab";
+  const message = `${targetLabel} saved to slot ${slotIndex + 1}`;
+
+  // Provide immediate feedback (best-effort).
+  await showSaveFeedback({ tabId: tab.id, message });
 
   // Optional behavior: close the current tab after saving *the tab*.
   // Never close a tab when we saved a hovered link.
@@ -182,13 +227,35 @@ async function saveToSlot(slotIndex) {
   }
 }
 
-chrome.commands.onCommand.addListener((command) => {
+async function handleCommand(command) {
   const match = /^save_to_folder_(\d+)$/.exec(command);
   if (!match) return;
 
   const n = Number(match[1]);
   if (!Number.isFinite(n) || n < 1 || n > 10) return;
 
-  // Fire-and-forget; service worker stays alive while the Promise is pending.
-  void saveToSlot(n - 1);
+  await saveToSlot(n - 1);
+}
+
+chrome.commands.onCommand.addListener((command) => {
+  // Keep the service worker alive by awaiting within this async chain.
+  void handleCommand(command);
+});
+
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (!msg || typeof msg !== "object") return;
+
+  if (msg.type === "instant-bookmark:hoverUpdate") {
+    const tabId = sender?.tab?.id;
+    if (!Number.isFinite(tabId)) return;
+
+    const url = typeof msg.url === "string" ? msg.url : "";
+    if (!url) return;
+
+    lastHoveredByTab.set(tabId, {
+      url,
+      title: typeof msg.title === "string" ? msg.title : "",
+      ts: typeof msg.ts === "number" ? msg.ts : Date.now(),
+    });
+  }
 });

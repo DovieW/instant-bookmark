@@ -52,6 +52,12 @@ You can change these in:
 - A content script tracks the currently hovered `<a>`.
 - The background service worker listens for commands and saves either the hovered link or the active tab into the configured bookmark folder.
 
+## Feedback when saving
+
+When you save via a keyboard shortcut, the extension provides quick feedback:
+
+- A brief toolbar badge (✓)
+
 ## Optional: close tab after saving
 
 In the popup, you can enable **Close tab after saving current tab**.
