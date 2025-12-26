@@ -1,6 +1,8 @@
 const STORAGE_KEY = "instantBookmark.folderPaths.v1";
 const CLOSE_TAB_KEY = "instantBookmark.closeTabAfterSave.v1";
 
+const SLOT_COUNT = 7;
+
 // Tracks the most recently hovered link reported by any frame in a tab.
 // Key: tabId, Value: { url, title, ts }
 const lastHoveredByTab = new Map();
@@ -25,17 +27,18 @@ async function showSaveFeedback({ tabId, message }) {
 }
 
 /**
- * Load the 10 user-defined folder paths.
- * Returns an array of length 10 with strings (possibly empty).
+ * Load the user-defined folder paths.
+ * Returns an array of length SLOT_COUNT with strings (possibly empty).
  */
 async function getFolderPaths() {
-  const out = await chrome.storage.sync.get({ [STORAGE_KEY]: Array(10).fill("") });
+  const out = await chrome.storage.sync.get({ [STORAGE_KEY]: Array(SLOT_COUNT).fill("") });
   const raw = out[STORAGE_KEY];
 
-  if (!Array.isArray(raw)) return Array(10).fill("");
+  if (!Array.isArray(raw)) return Array(SLOT_COUNT).fill("");
 
-  // Normalize to exactly 10 strings.
-  const normalized = Array(10)
+  // Normalize to exactly SLOT_COUNT strings.
+  // If a previous version stored more slots, preserve the first SLOT_COUNT.
+  const normalized = Array(SLOT_COUNT)
     .fill("")
     .map((_, i) => {
       const v = raw[i];
@@ -177,6 +180,37 @@ async function getActiveTab() {
   return tabs?.[0] ?? null;
 }
 
+function isNewTabUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  const u = url.toLowerCase();
+
+  // Chrome / Chromium
+  if (u === "chrome://newtab/" || u === "chrome://newtab") return true;
+  if (u === "chrome://new-tab-page/" || u === "chrome://new-tab-page") return true;
+
+  // Edge (Chromium)
+  if (u === "edge://newtab/" || u === "edge://newtab") return true;
+
+  // Firefox
+  if (u === "about:newtab" || u === "about:home") return true;
+
+  // A freshly created tab can sometimes be about:blank.
+  if (u === "about:blank") return true;
+
+  return false;
+}
+
+async function showErrorFeedback() {
+  try {
+    await chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
+    await chrome.action.setBadgeText({ text: "!" });
+    await sleep(1200);
+    await chrome.action.setBadgeText({ text: "" });
+  } catch {
+    // Best-effort only.
+  }
+}
+
 async function saveToSlot(slotIndex) {
   const tab = await getActiveTab();
   if (!tab?.id) return;
@@ -227,14 +261,78 @@ async function saveToSlot(slotIndex) {
   }
 }
 
+async function openFirstThenRemoveFromSlot(slotIndex) {
+  const tab = await getActiveTab();
+  if (!tab?.id) return;
+
+  const folderPaths = await getFolderPaths();
+  const rawPath = folderPaths[slotIndex] || "";
+  const pathToUse = rawPath || `Bookmarks Bar/Instant Bookmark/Slot ${slotIndex + 1}`;
+
+  const folderId = await resolveFolderIdFromPath(parseFolderPath(pathToUse));
+  if (!folderId) {
+    await showErrorFeedback();
+    return;
+  }
+
+  let children = [];
+  try {
+    children = await chrome.bookmarks.getChildren(folderId);
+  } catch {
+    await showErrorFeedback();
+    return;
+  }
+
+  const firstBookmark = (children || []).find((c) => typeof c?.url === "string" && c.url);
+  if (!firstBookmark?.id || !firstBookmark.url) {
+    await showErrorFeedback();
+    return;
+  }
+
+  // Open immediately after the current tab.
+  // If the current tab is already a new-tab page, reuse it.
+  try {
+    if (isNewTabUrl(tab.url)) {
+      await chrome.tabs.update(tab.id, { url: firstBookmark.url, active: true });
+    } else {
+      await chrome.tabs.create({
+        url: firstBookmark.url,
+        active: true,
+        index: typeof tab.index === "number" ? tab.index + 1 : undefined,
+        openerTabId: tab.id,
+      });
+    }
+  } catch {
+    // If we couldn't open it, do not remove it.
+    await showErrorFeedback();
+    return;
+  }
+
+  try {
+    await chrome.bookmarks.remove(firstBookmark.id);
+  } catch {
+    // Open succeeded but removal failed; still provide best-effort feedback.
+  }
+
+  await showSaveFeedback({ tabId: tab.id, message: `Opened+removed slot ${slotIndex + 1}` });
+}
+
 async function handleCommand(command) {
-  const match = /^save_to_folder_(\d+)$/.exec(command);
-  if (!match) return;
+  const saveMatch = /^save_to_folder_(\d+)$/.exec(command);
+  if (saveMatch) {
+    const n = Number(saveMatch[1]);
+    if (!Number.isFinite(n) || n < 1 || n > SLOT_COUNT) return;
+    await saveToSlot(n - 1);
+    return;
+  }
 
-  const n = Number(match[1]);
-  if (!Number.isFinite(n) || n < 1 || n > 10) return;
-
-  await saveToSlot(n - 1);
+  const openMatch = /^open_first_then_remove_(\d+)$/.exec(command);
+  if (openMatch) {
+    const n = Number(openMatch[1]);
+    if (!Number.isFinite(n) || n < 1 || n > SLOT_COUNT) return;
+    await openFirstThenRemoveFromSlot(n - 1);
+    return;
+  }
 }
 
 chrome.commands.onCommand.addListener((command) => {

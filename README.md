@@ -2,10 +2,16 @@
 
 Manifest V3 Chrome extension to instantly add bookmarks using keyboard shortcuts.
 
-You configure **10 shortcuts → 10 bookmark folder paths**. When you press a shortcut:
+You configure **7 slots → 7 bookmark folder paths**. When you press a shortcut:
 
 - If your mouse is hovering a link, the extension saves **that link**.
 - Otherwise, it saves the **current tab**.
+
+There are also **7 additional shortcuts** (one per slot) that:
+
+- grab the **first bookmark** from that slot’s folder
+- open it in a new tab immediately after your current tab (or reuse the current tab if it’s a new-tab page)
+- remove the bookmark from the folder
 
 ## Install (Load unpacked)
 
@@ -38,10 +44,13 @@ Default suggested shortcuts are:
 
 - Slot 1 → `Alt+1`
 - Slot 2 → `Alt+2`
-- Slot 3 → `Alt+3`
-- Slot 4 → `Alt+4`
 
-Slots **5–10** intentionally have **no suggested default** (so they don’t steal common key combos). Set them manually.
+Default suggested “open first then remove” shortcuts are:
+
+- Slot 1 → `Alt+Shift+1`
+- Slot 2 → `Alt+Shift+2`
+
+Slots **3–7** intentionally have **no suggested default** (so they don’t steal common key combos). Set them manually.
 
 You can change these in:
 

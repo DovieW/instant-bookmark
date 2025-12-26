@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Instant Bookmark",
   "version": "0.0.1",
-  "description": "Save hovered links (or the current tab) into your chosen bookmark folders via 10 keyboard shortcuts.",
+  "description": "Save hovered links (or the current tab) into 7 configured bookmark folders, plus 7 shortcuts to open+remove the first bookmark from those folders.",
   "permissions": [
     "bookmarks",
     "storage",
@@ -56,17 +56,9 @@
       "description": "Save hovered link/current tab to folder #2"
     },
     "save_to_folder_3": {
-      "suggested_key": {
-        "default": "Alt+3",
-        "mac": "Alt+3"
-      },
       "description": "Save hovered link/current tab to folder #3"
     },
     "save_to_folder_4": {
-      "suggested_key": {
-        "default": "Alt+4",
-        "mac": "Alt+4"
-      },
       "description": "Save hovered link/current tab to folder #4"
     },
     "save_to_folder_5": {
@@ -78,14 +70,34 @@
     "save_to_folder_7": {
       "description": "Save hovered link/current tab to folder #7"
     },
-    "save_to_folder_8": {
-      "description": "Save hovered link/current tab to folder #8"
+    "open_first_then_remove_1": {
+      "suggested_key": {
+        "default": "Alt+Shift+1",
+        "mac": "Alt+Shift+1"
+      },
+      "description": "Open first bookmark from folder #1 (then remove it)"
     },
-    "save_to_folder_9": {
-      "description": "Save hovered link/current tab to folder #9"
+    "open_first_then_remove_2": {
+      "suggested_key": {
+        "default": "Alt+Shift+2",
+        "mac": "Alt+Shift+2"
+      },
+      "description": "Open first bookmark from folder #2 (then remove it)"
     },
-    "save_to_folder_10": {
-      "description": "Save hovered link/current tab to folder #10"
+    "open_first_then_remove_3": {
+      "description": "Open first bookmark from folder #3 (then remove it)"
+    },
+    "open_first_then_remove_4": {
+      "description": "Open first bookmark from folder #4 (then remove it)"
+    },
+    "open_first_then_remove_5": {
+      "description": "Open first bookmark from folder #5 (then remove it)"
+    },
+    "open_first_then_remove_6": {
+      "description": "Open first bookmark from folder #6 (then remove it)"
+    },
+    "open_first_then_remove_7": {
+      "description": "Open first bookmark from folder #7 (then remove it)"
     }
   }
 }

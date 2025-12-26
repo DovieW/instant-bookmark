@@ -1,12 +1,14 @@
 const STORAGE_KEY = "instantBookmark.folderPaths.v1";
 const CLOSE_TAB_KEY = "instantBookmark.closeTabAfterSave.v1";
 
+const SLOT_COUNT = 7;
+
 const statusEl = document.getElementById("status");
 const saveBtn = document.getElementById("save");
 const openShortcutsBtn = document.getElementById("openShortcuts");
 const closeTabAfterSaveEl = document.getElementById("closeTabAfterSave");
 
-const inputs = Array.from({ length: 10 }, (_, i) => document.getElementById(`slot${i + 1}`));
+const inputs = Array.from({ length: SLOT_COUNT }, (_, i) => document.getElementById(`slot${i + 1}`));
 
 let statusTimer = null;
 function setStatus(text) {
@@ -25,13 +27,21 @@ function writeUI(values) {
   }
 }
 
+function normalizeFolderPaths(raw) {
+  if (!Array.isArray(raw)) return Array(SLOT_COUNT).fill("");
+  return Array.from({ length: SLOT_COUNT }, (_, i) => {
+    const v = raw[i];
+    return typeof v === "string" ? v.trim() : "";
+  });
+}
+
 async function load() {
   const out = await chrome.storage.sync.get({
-    [STORAGE_KEY]: Array(10).fill(""),
+    [STORAGE_KEY]: Array(SLOT_COUNT).fill(""),
     [CLOSE_TAB_KEY]: false,
   });
   const values = out[STORAGE_KEY];
-  writeUI(Array.isArray(values) ? values : Array(10).fill(""));
+  writeUI(normalizeFolderPaths(values));
 
   closeTabAfterSaveEl.checked = Boolean(out[CLOSE_TAB_KEY]);
 }
@@ -39,7 +49,7 @@ async function load() {
 async function save() {
   const values = readUI();
   await chrome.storage.sync.set({
-    [STORAGE_KEY]: values,
+    [STORAGE_KEY]: normalizeFolderPaths(values),
     [CLOSE_TAB_KEY]: Boolean(closeTabAfterSaveEl.checked),
   });
   setStatus("Saved");
