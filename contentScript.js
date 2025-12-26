@@ -4,6 +4,29 @@ let lastSentUrl = null;
 let lastSentAt = 0;
 const HOVER_SEND_MIN_INTERVAL_MS = 200;
 
+function sendHoverClear(reason) {
+  const now = Date.now();
+
+  // Avoid spamming the service worker.
+  if (now - lastSentAt < HOVER_SEND_MIN_INTERVAL_MS) return;
+
+  // Only send a clear if we previously sent a URL.
+  if (!lastSentUrl) return;
+
+  lastSentUrl = null;
+  lastSentAt = now;
+
+  try {
+    chrome.runtime.sendMessage({
+      type: "instant-bookmark:hoverClear",
+      ts: now,
+      reason: typeof reason === "string" ? reason : "",
+    });
+  } catch {
+    // ignore
+  }
+}
+
 function isProbablyUsefulUrl(url, rawHref) {
   if (!url || typeof url !== "string") return false;
 
@@ -83,11 +106,55 @@ function onPointerMove() {
         // ignore
       }
     }
+  } else {
+    // If the cursor moved off a link, clear the last-good hover to avoid "sticky" saves.
+    // (We still never respond with null to getHovered requests; see comment below.)
+    lastGoodHover = null;
+    sendHoverClear("no-hovered-link");
   }
 }
 
 window.addEventListener("pointermove", onPointerMove, { capture: true, passive: true });
 window.addEventListener("mousemove", onPointerMove, { capture: true, passive: true });
+
+// When the pointer leaves the frame or the document loses focus, clear stale hover state.
+window.addEventListener(
+  "pointerleave",
+  () => {
+    lastGoodHover = null;
+    sendHoverClear("pointerleave");
+  },
+  { capture: true, passive: true }
+);
+
+window.addEventListener(
+  "mouseleave",
+  () => {
+    lastGoodHover = null;
+    sendHoverClear("mouseleave");
+  },
+  { capture: true, passive: true }
+);
+
+window.addEventListener(
+  "blur",
+  () => {
+    lastGoodHover = null;
+    sendHoverClear("blur");
+  },
+  { capture: true, passive: true }
+);
+
+document.addEventListener(
+  "visibilitychange",
+  () => {
+    if (document.visibilityState !== "visible") {
+      lastGoodHover = null;
+      sendHoverClear("hidden");
+    }
+  },
+  { capture: true, passive: true }
+);
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || typeof msg !== "object") return;

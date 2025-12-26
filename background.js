@@ -15,7 +15,7 @@ const BADGE_CLEAR_DELAY_MS = 1200;
 // Key: tabId, Value: { url, title, ts }
 const lastHoveredByTab = new Map();
 
-const HOVER_FRESH_MS = 2500;
+const HOVER_FRESH_MS = 1200;
 
 // In-memory caches to avoid slow per-command lookups.
 let cachedFolderPaths = Array(SLOT_COUNT).fill("");
@@ -647,6 +647,25 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       title: typeof msg.title === "string" ? msg.title : "",
       ts: typeof msg.ts === "number" ? msg.ts : Date.now(),
     });
+  }
+
+  if (msg.type === "instant-bookmark:hoverClear") {
+    const tabId = sender?.tab?.id;
+    if (!Number.isFinite(tabId)) return;
+
+    const ts = typeof msg.ts === "number" ? msg.ts : Date.now();
+    const cur = lastHoveredByTab.get(tabId);
+
+    // Only clear if this clear event is newer than (or equal to) the last hover update.
+    if (!cur || typeof cur !== "object") {
+      lastHoveredByTab.delete(tabId);
+      return;
+    }
+
+    const curTs = Number(cur.ts);
+    if (!Number.isFinite(curTs) || ts >= curTs) {
+      lastHoveredByTab.delete(tabId);
+    }
   }
 });
 
