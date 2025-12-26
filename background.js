@@ -1,7 +1,15 @@
 const STORAGE_KEY = "instantBookmark.folderPaths.v1";
 const CLOSE_TAB_KEY = "instantBookmark.closeTabAfterSave.v1";
+const EXCLUDED_DOMAINS_KEY = "instantBookmark.excludedDomains.v1";
+
+const DEFAULT_EXCLUDED_DOMAINS = "mail.google.com, www.google.com";
+
+const LAST_OUTCOME_KEY = "instantBookmark.lastOutcome.v1";
 
 const SLOT_COUNT = 7;
+
+const BADGE_CLEAR_ALARM_NAME = "instant-bookmark:clearBadge";
+const BADGE_CLEAR_DELAY_MS = 1200;
 
 // Tracks the most recently hovered link reported by any frame in a tab.
 // Key: tabId, Value: { url, title, ts }
@@ -9,9 +17,184 @@ const lastHoveredByTab = new Map();
 
 const HOVER_FRESH_MS = 2500;
 
+// In-memory caches to avoid slow per-command lookups.
+let cachedFolderPaths = Array(SLOT_COUNT).fill("");
+let cachedCloseTabAfterSave = false;
+let cachedExcludedDomainsRaw = "";
+let cachedExcludedDomains = [];
+let settingsLoaded = false;
+let settingsLoadPromise = null;
+
+// Cache resolved folder IDs by canonical path key.
+const folderIdCache = new Map();
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+function normalizeFolderPaths(raw) {
+  if (!Array.isArray(raw)) return Array(SLOT_COUNT).fill("");
+  return Array.from({ length: SLOT_COUNT }, (_, i) => {
+    const v = raw[i];
+    return typeof v === "string" ? v.trim() : "";
+  });
+}
+
+function normalizeExcludedDomainsRaw(raw) {
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function normalizeDomainToken(token) {
+  if (!token || typeof token !== "string") return null;
+  let t = token.trim().toLowerCase();
+  if (!t) return null;
+
+  // Allow common patterns like "*.example.com" or ".example.com".
+  t = t.replace(/^\*\./, "").replace(/^\.+/, "");
+
+  // If user pasted a full URL, extract hostname.
+  if (t.includes("://")) {
+    try {
+      const u = new URL(t);
+      t = (u.hostname || "").toLowerCase();
+    } catch {
+      // fall through
+    }
+  }
+
+  // Strip path/query/fragment and ports.
+  t = t.split(/[/?#]/)[0];
+  t = t.split(":")[0];
+  t = t.replace(/^\.+/, "").trim();
+
+  if (!t) return null;
+  if (!/^[a-z0-9.-]+$/.test(t)) return null;
+  if (t === "." || t === "-") return null;
+
+  return t;
+}
+
+function parseExcludedDomains(raw) {
+  if (!raw || typeof raw !== "string") return [];
+  const parts = raw
+    .split(",")
+    .map((s) => normalizeDomainToken(s))
+    .filter(Boolean);
+
+  // De-dupe, keep stable order.
+  const seen = new Set();
+  const out = [];
+  for (const p of parts) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(p);
+  }
+  return out;
+}
+
+function urlMatchesExcludedDomains(url, excludedDomains) {
+  if (!url || typeof url !== "string") return false;
+  if (!Array.isArray(excludedDomains) || excludedDomains.length === 0) return false;
+  let hostname = "";
+  try {
+    hostname = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (!hostname) return false;
+
+  for (const d of excludedDomains) {
+    if (!d) continue;
+    if (hostname === d) return true;
+    if (hostname.endsWith(`.${d}`)) return true;
+  }
+  return false;
+}
+
+async function recordLastOutcome(outcome) {
+  // Best-effort: used by the popup UI for user feedback.
+  try {
+    await chrome.storage.local.set({
+      [LAST_OUTCOME_KEY]: {
+        ...outcome,
+        ts: typeof outcome?.ts === "number" ? outcome.ts : Date.now(),
+      },
+    });
+  } catch {
+    // ignore
+  }
+}
+
+async function ensureSettingsLoaded() {
+  if (settingsLoaded) return;
+  if (settingsLoadPromise) {
+    await settingsLoadPromise;
+    return;
+  }
+
+  settingsLoadPromise = (async () => {
+    try {
+      const out = await chrome.storage.sync.get({
+        [STORAGE_KEY]: Array(SLOT_COUNT).fill(""),
+        [CLOSE_TAB_KEY]: false,
+        [EXCLUDED_DOMAINS_KEY]: DEFAULT_EXCLUDED_DOMAINS,
+      });
+
+      cachedFolderPaths = normalizeFolderPaths(out[STORAGE_KEY]);
+      cachedCloseTabAfterSave = Boolean(out[CLOSE_TAB_KEY]);
+      cachedExcludedDomainsRaw = normalizeExcludedDomainsRaw(out[EXCLUDED_DOMAINS_KEY]);
+      cachedExcludedDomains = parseExcludedDomains(cachedExcludedDomainsRaw);
+    } finally {
+      settingsLoaded = true;
+      settingsLoadPromise = null;
+    }
+  })();
+
+  await settingsLoadPromise;
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "sync") return;
+
+  if (changes?.[STORAGE_KEY]) {
+    cachedFolderPaths = normalizeFolderPaths(changes[STORAGE_KEY].newValue);
+    // Folder paths changed; folderId cache might now be stale or unused.
+    folderIdCache.clear();
+  }
+
+  if (changes?.[CLOSE_TAB_KEY]) {
+    cachedCloseTabAfterSave = Boolean(changes[CLOSE_TAB_KEY].newValue);
+  }
+
+  if (changes?.[EXCLUDED_DOMAINS_KEY]) {
+    cachedExcludedDomainsRaw = normalizeExcludedDomainsRaw(changes[EXCLUDED_DOMAINS_KEY].newValue);
+    cachedExcludedDomains = parseExcludedDomains(cachedExcludedDomainsRaw);
+  }
+
+  settingsLoaded = true;
+});
+
+function scheduleBadgeClear() {
+  try {
+    // Use an alarm rather than setTimeout because MV3 service workers can suspend.
+    chrome.alarms.create(BADGE_CLEAR_ALARM_NAME, { when: Date.now() + BADGE_CLEAR_DELAY_MS });
+  } catch {
+    // Best-effort only.
+  }
+}
+
+async function clearBadge() {
+  try {
+    await chrome.action.setBadgeText({ text: "" });
+  } catch {
+    // Best-effort only.
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name !== BADGE_CLEAR_ALARM_NAME) return;
+  void clearBadge();
+});
 
 async function showSaveFeedback({ tabId, message }) {
   // Badge feedback: requires no extra permissions.
@@ -19,8 +202,7 @@ async function showSaveFeedback({ tabId, message }) {
   try {
     await chrome.action.setBadgeBackgroundColor({ color: "#2e7d32" });
     await chrome.action.setBadgeText({ text: "✓" });
-    await sleep(1200);
-    await chrome.action.setBadgeText({ text: "" });
+    scheduleBadgeClear();
   } catch {
     // Some Chromium variants or policies may restrict action APIs.
   }
@@ -31,26 +213,18 @@ async function showSaveFeedback({ tabId, message }) {
  * Returns an array of length SLOT_COUNT with strings (possibly empty).
  */
 async function getFolderPaths() {
-  const out = await chrome.storage.sync.get({ [STORAGE_KEY]: Array(SLOT_COUNT).fill("") });
-  const raw = out[STORAGE_KEY];
-
-  if (!Array.isArray(raw)) return Array(SLOT_COUNT).fill("");
-
-  // Normalize to exactly SLOT_COUNT strings.
-  // If a previous version stored more slots, preserve the first SLOT_COUNT.
-  const normalized = Array(SLOT_COUNT)
-    .fill("")
-    .map((_, i) => {
-      const v = raw[i];
-      return typeof v === "string" ? v.trim() : "";
-    });
-
-  return normalized;
+  await ensureSettingsLoaded();
+  return cachedFolderPaths;
 }
 
 async function getCloseTabAfterSaveSetting() {
-  const out = await chrome.storage.sync.get({ [CLOSE_TAB_KEY]: false });
-  return Boolean(out[CLOSE_TAB_KEY]);
+  await ensureSettingsLoaded();
+  return cachedCloseTabAfterSave;
+}
+
+async function getExcludedDomains() {
+  await ensureSettingsLoaded();
+  return cachedExcludedDomains;
 }
 
 function parseFolderPath(path) {
@@ -70,21 +244,81 @@ function isFolder(node) {
   return !node.url;
 }
 
-async function getBookmarksRoots() {
-  const trees = await chrome.bookmarks.getTree();
-  const root = trees?.[0];
-  return root?.children ?? [];
+async function getBookmarkRootNodes() {
+  // Prefer fetching only the root's direct children; this avoids pulling the entire tree.
+  try {
+    const roots = await chrome.bookmarks.getChildren("0");
+    return roots ?? [];
+  } catch {
+    // Fallback: older / restricted environments.
+    const trees = await chrome.bookmarks.getTree();
+    const root = trees?.[0];
+    return root?.children ?? [];
+  }
 }
 
-function findChildFolderByTitle(parent, title) {
-  const want = title.toLowerCase();
-  const children = parent?.children ?? [];
-  return children.find((c) => isFolder(c) && (c.title || "").toLowerCase() === want) || null;
+function canonicalizePathSegments(pathSegments) {
+  // Canonical roots/aliases (case-insensitive). If the root isn't specified, default to Bookmarks Bar.
+  const aliases = {
+    "bookmarks bar": "bookmarks bar",
+    bar: "bookmarks bar",
+    "other bookmarks": "other bookmarks",
+    other: "other bookmarks",
+    "mobile bookmarks": "mobile bookmarks",
+    mobile: "mobile bookmarks",
+  };
+
+  if (!pathSegments.length) {
+    return {
+      rootTitleLower: "bookmarks bar",
+      remainingSegments: [],
+      cacheKey: "bookmarks bar/",
+    };
+  }
+
+  const firstLower = String(pathSegments[0] || "").toLowerCase();
+  const rootTitleLower = aliases[firstLower] || "bookmarks bar";
+  const remainingSegments = aliases[firstLower] ? pathSegments.slice(1) : pathSegments;
+
+  const remainingLower = remainingSegments.map((s) => String(s || "").trim().toLowerCase()).filter(Boolean);
+  const cacheKey = `${rootTitleLower}/${remainingLower.join("/")}`;
+
+  return { rootTitleLower, remainingSegments, cacheKey };
 }
 
-async function ensureFolder(parentId, title) {
-  // Create if missing.
-  return chrome.bookmarks.create({ parentId, title });
+function pickRootId(roots, rootTitleLower) {
+  // In Chrome, these IDs are stable: 1=Bookmarks Bar, 2=Other Bookmarks, 3=Mobile Bookmarks.
+  // Use them when present; fall back to title matching; then fall back to the first root.
+  const byId = new Map((roots || []).map((n) => [String(n?.id ?? ""), n]));
+  if (rootTitleLower === "bookmarks bar" && byId.has("1")) return "1";
+  if (rootTitleLower === "other bookmarks" && byId.has("2")) return "2";
+  if (rootTitleLower === "mobile bookmarks" && byId.has("3")) return "3";
+
+  const match = (roots || []).find((n) => (n?.title || "").toLowerCase() === rootTitleLower);
+  if (match?.id) return match.id;
+
+  return (roots?.[0] || null)?.id ?? null;
+}
+
+async function getOrCreateChildFolder(parentId, title) {
+  const want = String(title || "").trim().toLowerCase();
+  if (!want) return null;
+
+  let children = [];
+  try {
+    children = await chrome.bookmarks.getChildren(parentId);
+  } catch {
+    return null;
+  }
+
+  const existing = (children || []).find((c) => isFolder(c) && (c.title || "").toLowerCase() === want);
+  if (existing?.id) return existing;
+
+  try {
+    return await chrome.bookmarks.create({ parentId, title });
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -93,62 +327,33 @@ async function ensureFolder(parentId, title) {
  * and returns the folder id (creating folders if needed).
  */
 async function resolveFolderIdFromPath(pathSegments) {
-  const roots = await getBookmarksRoots();
+  const { rootTitleLower, remainingSegments, cacheKey } = canonicalizePathSegments(pathSegments);
 
-  // If no segments, default to the bookmarks bar root if available.
-  if (!pathSegments.length) {
-    const bar = roots.find((n) => (n.title || "").toLowerCase() === "bookmarks bar");
-    return (bar ?? roots[0])?.id;
-  }
+  const cached = folderIdCache.get(cacheKey);
+  if (cached && typeof cached === "string") return cached;
 
-  // First segment must match a root node title (Bookmarks Bar / Other Bookmarks / Mobile Bookmarks)
-  const first = pathSegments[0].toLowerCase();
-  let current =
-    roots.find((n) => (n.title || "").toLowerCase() === first) ||
-    // convenience aliases
-    roots.find((n) => first === "bar" && (n.title || "").toLowerCase() === "bookmarks bar") ||
-    roots.find((n) => first === "other" && (n.title || "").toLowerCase() === "other bookmarks") ||
-    roots.find((n) => first === "mobile" && (n.title || "").toLowerCase() === "mobile bookmarks") ||
-    null;
+  const roots = await getBookmarkRootNodes();
+  const rootId = pickRootId(roots, rootTitleLower);
+  if (!rootId) return null;
 
-  // If they didn’t specify an actual root, treat it as a folder under Bookmarks Bar.
-  if (!current) {
-    current = roots.find((n) => (n.title || "").toLowerCase() === "bookmarks bar") || roots[0] || null;
-    if (!current) return null;
-
-    // Now we will create/find the first segment under that root.
-    const syntheticSegments = pathSegments;
-    return resolveFolderIdUnderRoot(current, syntheticSegments);
-  }
-
-  return resolveFolderIdUnderRoot(current, pathSegments.slice(1));
-}
-
-async function resolveFolderIdUnderRoot(rootNode, remainingSegments) {
-  let parent = rootNode;
-
+  let parentId = rootId;
   for (const seg of remainingSegments) {
-    const existing = findChildFolderByTitle(parent, seg);
-    if (existing) {
-      parent = existing;
-      continue;
-    }
-
-    const created = await ensureFolder(parent.id, seg);
-
-    // Keep a minimal synthetic children list so subsequent segments can resolve.
-    if (!parent.children) parent.children = [];
-    parent.children.push({ ...created, children: [] });
-
-    parent = created;
+    const folder = await getOrCreateChildFolder(parentId, seg);
+    if (!folder?.id) return null;
+    parentId = folder.id;
   }
 
-  return parent.id;
+  folderIdCache.set(cacheKey, parentId);
+  return parentId;
 }
 
 async function getHoveredLinkFromTab(tabId) {
   try {
-    const res = await chrome.tabs.sendMessage(tabId, { type: "instant-bookmark:getHovered" });
+    // Don't let a slow/noisy frame response block the shortcut.
+    const res = await Promise.race([
+      chrome.tabs.sendMessage(tabId, { type: "instant-bookmark:getHovered" }),
+      sleep(175).then(() => null),
+    ]);
     if (!res || typeof res !== "object") return null;
     if (!res.url || typeof res.url !== "string") return null;
     return {
@@ -157,6 +362,65 @@ async function getHoveredLinkFromTab(tabId) {
     };
   } catch {
     // Most commonly: no content script on chrome:// pages, or tab not reachable.
+    return null;
+  }
+}
+
+async function getHoveredLinkViaScripting(tabId) {
+  // Fallback for pages/frames where our content script can't run or can't reliably respond
+  // (e.g. Gmail message body iframes). Requires the "scripting" permission.
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => {
+        function isProbablyUsefulUrl(url, rawHref) {
+          if (!url || typeof url !== "string") return false;
+          const raw = (rawHref || "").trim().toLowerCase();
+          if (!raw) return false;
+          if (raw === "#" || raw.startsWith("javascript:") || raw.startsWith("void(") || raw.startsWith("about:")) {
+            return false;
+          }
+          if (raw.startsWith("#")) return false;
+          try {
+            const u = new URL(url);
+            return u.protocol === "http:" || u.protocol === "https:";
+          } catch {
+            return false;
+          }
+        }
+
+        function findHovered() {
+          try {
+            const hovered = document.querySelectorAll(":hover");
+            const el = hovered?.[hovered.length - 1];
+            if (!el) return null;
+            const a = el.closest?.("a[href]");
+            if (!a) return null;
+            const url = a.href;
+            const rawHref = a.getAttribute("href");
+            if (!isProbablyUsefulUrl(url, rawHref)) return null;
+            const title = (a.getAttribute("title") || a.textContent || "").trim();
+            return { url, title: title || url };
+          } catch {
+            return null;
+          }
+        }
+
+        return findHovered();
+      },
+    });
+
+    for (const r of results || []) {
+      const v = r?.result;
+      if (v && typeof v === "object" && typeof v.url === "string" && v.url) {
+        return {
+          url: v.url,
+          title: typeof v.title === "string" && v.title.trim() ? v.title.trim() : v.url,
+        };
+      }
+    }
+    return null;
+  } catch {
     return null;
   }
 }
@@ -204,8 +468,7 @@ async function showErrorFeedback() {
   try {
     await chrome.action.setBadgeBackgroundColor({ color: "#c62828" });
     await chrome.action.setBadgeText({ text: "!" });
-    await sleep(1200);
-    await chrome.action.setBadgeText({ text: "" });
+    scheduleBadgeClear();
   } catch {
     // Best-effort only.
   }
@@ -225,21 +488,48 @@ async function saveToSlot(slotIndex) {
   const folderId = await resolveFolderIdFromPath(parseFolderPath(pathToUse));
   if (!folderId) return;
 
+  const excludedDomains = await getExcludedDomains();
+
   // Prefer hover cache first (works across iframes, e.g. Gmail).
   // Fall back to asking the tab directly.
-  const hovered = getRecentHoveredLinkFromCache(tab.id) ?? (await getHoveredLinkFromTab(tab.id));
+  let hovered = getRecentHoveredLinkFromCache(tab.id) ?? (await getHoveredLinkFromTab(tab.id));
+  let usedHoveredLink = Boolean(hovered?.url);
 
-  const usedHoveredLink = Boolean(hovered?.url);
+  // Important: exclusions are TAB-only.
+  // If the tab is excluded but we failed to detect a hovered link, try a stronger fallback
+  // so users can still save hovered links on excluded sites (like Gmail).
+  const tabIsExcluded = urlMatchesExcludedDomains(tab.url, excludedDomains);
+  if (!usedHoveredLink && tabIsExcluded) {
+    hovered = await getHoveredLinkViaScripting(tab.id);
+    usedHoveredLink = Boolean(hovered?.url);
+  }
+
   const url = usedHoveredLink ? hovered.url : tab.url;
   if (!url || typeof url !== "string") return;
 
+  const isTabExcluded = !usedHoveredLink && tabIsExcluded;
+  if (isTabExcluded) {
+    await recordLastOutcome({
+      type: "excluded-tab",
+      url: tab.url || "",
+      slotIndex,
+    });
+    await showErrorFeedback();
+    return;
+  }
+
   const title = (usedHoveredLink ? hovered.title : tab.title) || url;
 
-  await chrome.bookmarks.create({
-    parentId: folderId,
-    title,
-    url,
-  });
+  try {
+    await chrome.bookmarks.create({
+      parentId: folderId,
+      title,
+      url,
+    });
+  } catch {
+    await showErrorFeedback();
+    return;
+  }
 
   const targetLabel = usedHoveredLink ? "Link" : "Tab";
   const message = `${targetLabel} saved to slot ${slotIndex + 1}`;
@@ -252,6 +542,8 @@ async function saveToSlot(slotIndex) {
   if (!usedHoveredLink) {
     const closeAfterSave = await getCloseTabAfterSaveSetting();
     if (closeAfterSave) {
+      // Never close tabs on excluded domains.
+      if (isTabExcluded) return;
       try {
         await chrome.tabs.remove(tab.id);
       } catch {
@@ -357,3 +649,12 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     });
   }
 });
+
+// Keep caches fresh.
+chrome.bookmarks.onCreated.addListener(() => folderIdCache.clear());
+chrome.bookmarks.onRemoved.addListener(() => folderIdCache.clear());
+chrome.bookmarks.onChanged.addListener(() => folderIdCache.clear());
+chrome.bookmarks.onMoved.addListener(() => folderIdCache.clear());
+
+// Prime settings cache early so the first shortcut is snappier.
+void ensureSettingsLoaded();

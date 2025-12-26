@@ -35,6 +35,20 @@
               <span class="toggle__hint">Never closes when saving a hovered link.</span>
             </span>
           </label>
+
+          <div class="field" aria-label="Exclusions">
+            <label class="field__label" for="excludedDomains">Excluded domains</label>
+            <input
+              id="excludedDomains"
+              inputmode="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="mail.google.com, calendar.google.com"
+            />
+            <div class="field__hint">
+              Comma-separated. Blocks saving/closing the current tab on these domains (including subdomains). Hovered links still save.
+            </div>
+          </div>
         </section>
 
         <div class="note" role="note">

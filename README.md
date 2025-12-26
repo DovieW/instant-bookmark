@@ -61,6 +61,8 @@ You can change these in:
 - A content script tracks the currently hovered `<a>`.
 - The background service worker listens for commands and saves either the hovered link or the active tab into the configured bookmark folder.
 
+Note: on some sites (notably Gmail), hovered links can live inside special iframes; the extension may use an on-demand fallback to detect the hovered link.
+
 ## Feedback when saving
 
 When you save via a keyboard shortcut, the extension provides quick feedback:
@@ -73,3 +75,18 @@ In the popup, you can enable **Close tab after saving current tab**.
 
 - This closes the tab only when the shortcut saved the **current tab**.
 - It **never** closes the tab when the shortcut saved a **hovered link**.
+
+## Optional: excluded domains (blocklist)
+
+In the popup you can set **Excluded domains** (comma-separated).
+
+Default (first install) excludes:
+
+- `mail.google.com`
+- `www.google.com`
+
+When a save shortcut runs:
+
+- If the shortcut would save the **current tab** and that tab is on an excluded domain (or any subdomain), the extension **does nothing** (and shows an error badge).
+- This does **not** affect saving a **hovered link** on the page.
+- Tabs on excluded domains are **never closed** by the “close tab after saving” option.

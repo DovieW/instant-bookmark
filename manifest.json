@@ -5,7 +5,9 @@
   "description": "Save hovered links (or the current tab) into 7 configured bookmark folders, plus 7 shortcuts to open+remove the first bookmark from those folders.",
   "permissions": [
     "bookmarks",
+    "alarms",
     "storage",
+    "scripting",
     "tabs"
   ],
   "host_permissions": [
