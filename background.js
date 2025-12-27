@@ -474,6 +474,17 @@ async function showErrorFeedback() {
   }
 }
 
+async function showWarningFeedback() {
+  try {
+    // Amber-ish warning color.
+    await chrome.action.setBadgeBackgroundColor({ color: "#ed6c02" });
+    await chrome.action.setBadgeText({ text: "!" });
+    scheduleBadgeClear();
+  } catch {
+    // Best-effort only.
+  }
+}
+
 async function saveToSlot(slotIndex) {
   const tab = await getActiveTab();
   if (!tab?.id) return;
@@ -577,7 +588,15 @@ async function openFirstThenRemoveFromSlot(slotIndex) {
 
   const firstBookmark = (children || []).find((c) => typeof c?.url === "string" && c.url);
   if (!firstBookmark?.id || !firstBookmark.url) {
-    await showErrorFeedback();
+    // Folder exists but has no bookmark items (could be truly empty, or only subfolders).
+    await recordLastOutcome({
+      type: "empty-slot",
+      slotIndex,
+      folderId,
+      // Keep the configured path so the popup can show a helpful message.
+      path: pathToUse,
+    });
+    await showWarningFeedback();
     return;
   }
 

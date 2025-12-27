@@ -59,11 +59,20 @@ async function load() {
   try {
     const local = await chrome.storage.local.get({ [LAST_OUTCOME_KEY]: null });
     const last = local[LAST_OUTCOME_KEY];
-    if (last && typeof last === "object" && last.type === "excluded-tab") {
-      // Keep this visible a bit longer than the usual "Saved" toast.
-      setStatus("⛔ Blocked by exclusions", { clearAfterMs: 4000 });
-      // Clear so it doesn't keep showing every time the popup opens.
-      await chrome.storage.local.remove(LAST_OUTCOME_KEY);
+    if (last && typeof last === "object") {
+      if (last.type === "excluded-tab") {
+        // Keep this visible a bit longer than the usual "Saved" toast.
+        setStatus("⛔ Blocked by exclusions", { clearAfterMs: 4000 });
+        // Clear so it doesn't keep showing every time the popup opens.
+        await chrome.storage.local.remove(LAST_OUTCOME_KEY);
+      }
+
+      if (last.type === "empty-slot") {
+        const slotNumber = Number.isFinite(Number(last.slotIndex)) ? Number(last.slotIndex) + 1 : null;
+        const suffix = slotNumber ? ` (slot ${slotNumber})` : "";
+        setStatus(`⚠️ Folder is empty${suffix}`, { clearAfterMs: 4500 });
+        await chrome.storage.local.remove(LAST_OUTCOME_KEY);
+      }
     }
   } catch {
     // ignore
